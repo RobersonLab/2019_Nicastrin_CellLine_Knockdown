@@ -1,0 +1,455 @@
+---
+title: "Nicastrin knockdown with A08 shRNA in HEK001 and HEK293"
+author: "E. Roberson"
+date: "March 2, 2018"
+output: html_document
+---
+
+```{r library_imports}
+library( here )
+library( plyr )
+library( dplyr )
+library( tibble )
+library( ggplot2 )
+library( cowplot )
+library( reshape2 )
+library( stringr )
+library( UpSetR )
+library( ggrepel )
+library( readr )
+library( pheatmap )
+library( RColorBrewer )
+
+library( beadarray )
+library( limma )
+```
+
+```{r source_it}
+source( here::here( 'code', "ncstn_knockdown_fxns.R" ) )
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message=FALSE,
+	fig.path=paste0( output_figure_rel_dir, "/" ),
+	fig.keep='all',
+	dpi=300,
+	fig.width=11,
+	fig.height=8.5 )
+```
+
+```{r constant_y_fxn_setup}
+####################################
+# Use beadarray detection p-values #
+# to decide if a probe is detected #
+# over background                  #
+####################################
+isFound = function( x, n, pval=0.05 )
+{
+  count = length( which( x <= pval ) )
+  
+	if ( count > n )
+	{
+		return( TRUE )
+	}
+	return( FALSE )
+}
+
+
+min_absolute_foldchange <- 1.50
+log2_min_absolute_foldchange <- log2( min_absolute_foldchange )
+
+n_top <- 30
+```
+
+```{r annotation}
+ilmn_annote <- read_csv( file = annotation, col_names = TRUE ) %>%
+	mutate( GoodID = paste0( "id_", ProbeID ) ) %>%
+	mutate( Symbol = SYMBOL ) %>%
+	mutate( Accession = ACCESSION ) %>%
+	mutate( Symbol = ifelse( is.na( Symbol ), ILMN_GENE, Symbol ) ) %>%
+	dplyr::select( GoodID, Symbol, Accession )
+ilmn_annote <- as.data.frame( ilmn_annote )
+rownames( ilmn_annote ) <- ilmn_annote$GoodID
+```
+
+```{r load_data}
+raw_exprs_data <- readBeadSummaryData( dataFile = raw_knockdown_array, ProbeID="ProbeID", skip=0, sep="," )
+```
+
+```{r found_only, message=FALSE}
+found <- apply( Detection( raw_exprs_data ), 1, isFound, n=3 )
+raw_exprs_data <- raw_exprs_data[ which( found ), ]
+```
+
+This is background subtracted, so some of the data *could* be negative. Since we'll log2 in a minute we need to shift the data to a similar minimum before transforming and normalizing.
+
+```{r shift, message=FALSE}
+raw_vals <- exprs( raw_exprs_data )
+
+for ( column in 1:dim(raw_vals)[2] )
+{
+  raw_vals[,column] <- raw_vals[,column] + ( 2 - min( raw_vals[,column] ) )
+}
+
+raw_exprs_data@assayData$exprs <- raw_vals
+```
+
+Normalize expression.
+
+```{r normalize_y_transform, message=FALSE}
+norm.exprs <- normaliseIllumina( raw_exprs_data, method="quantile", transform="log2" )
+```
+
+## Contrast models & DE
+
+```{r model, message=FALSE}
+sample_df <- data.frame( Array_Names = colnames( exprs( norm.exprs ) ) ) %>%
+	mutate( Cells = ifelse( str_detect( Array_Names, "293" ), "HEK293", "HEK001" ) ) %>%
+	mutate( shRNA = ifelse( str_detect( Array_Names, "A08" ), "A08", "pLKO" ) ) %>%
+	mutate( Status = paste( Cells, shRNA, sep="_" ) ) %>%
+	mutate( Status = factor( Status ) )
+
+design_matrix <- model.matrix( ~0 + Status, data=sample_df )
+colnames( design_matrix ) <- levels( sample_df$Status )
+```
+
+Then fit the models and figure out differential expression.
+
+```{r fit_y_DE, message=FALSE}
+fit <- lmFit( exprs( norm.exprs ), design_matrix ) 
+
+cont.matrix <- makeContrasts(
+	HEK293 = HEK293_A08 - HEK293_pLKO,
+	HEK001 = HEK001_A08 - HEK001_pLKO,
+	levels = design_matrix )
+  		  
+cont.fit <- contrasts.fit( fit, cont.matrix )
+ebFit <- eBayes( cont.fit )
+```
+
+## Annotate DE
+
+```{r annotateLists, message=FALSE}
+de_hek293 <- topTable( ebFit, coef="HEK293", number=Inf ) %>%
+	rownames_to_column( ., "ProbeID" ) %>%
+	mutate( ., GoodID = paste0( "id_", ProbeID ) ) %>%
+	mutate( ., FC = 2^logFC ) %>%
+	mutate( ., FC = ifelse( FC < 1.0, -1 / FC, FC ) ) %>%
+	mutate( ., pvalue = P.Value ) %>%
+	mutate( ., padj = adj.P.Val ) %>%
+	merge( ilmn_annote, . ) %>%
+	mutate( ., NM_noVersion = str_replace( Accession, pattern = "\\.[0-9]+", replacement = "" ) ) %>%
+	select( ., Symbol, GoodID, Accession, NM_noVersion, AveExpr, t, B, FC, logFC, pvalue, padj ) %>%
+	arrange( ., padj, pvalue ) %>%
+	write_csv( ., path = file.path( output_rel_dir, "HEK293_DEG.csv" ) )
+
+de_hek001 <- topTable( ebFit, coef="HEK001", number=Inf ) %>%
+	rownames_to_column( ., "ProbeID" ) %>%
+	mutate( ., GoodID = paste0( "id_", ProbeID ) ) %>%
+	mutate( ., FC = 2^logFC ) %>%
+	mutate( ., FC = ifelse( FC < 1.0, -1 / FC, FC ) ) %>%
+	mutate( ., pvalue = P.Value ) %>%
+	mutate( ., padj = adj.P.Val ) %>%
+	select( ., GoodID, AveExpr, t, B, FC, logFC, pvalue, padj ) %>%
+	merge( ilmn_annote, . ) %>%
+	mutate( ., NM_noVersion = str_replace( Accession, pattern = "\\.[0-9]+", replacement = "" ) ) %>%
+	select( ., Symbol, GoodID, Accession, NM_noVersion, AveExpr, t, B, FC, logFC, pvalue, padj ) %>%
+	arrange( ., padj, pvalue ) %>%
+	write_csv( ., path=file.path( output_rel_dir, "HEK001_DEG.csv" ) )
+
+# Pull significant gene identifiers
+hek293_signif <- de_hek293 %>%
+	filter( padj < 0.05 ) %>%
+	.[["GoodID"]]
+
+hek001_signif <- de_hek001 %>%
+	filter( padj < 0.05 ) %>%
+	.[["GoodID"]]
+
+# all significant up and down
+all_hek293_signif_up <- de_hek293 %>%
+	filter( padj < 0.05 & FC >= 1.0 ) %>%
+	.[["GoodID"]]
+	
+all_hek293_signif_down <- de_hek293 %>%
+	filter( padj < 0.05 & FC <= 1.0 ) %>%
+	.[["GoodID"]] 
+
+all_hek001_signif_up <- de_hek001 %>%
+	filter( padj < 0.05 & FC >= 1.0 ) %>%
+	.[["GoodID"]]
+	
+all_hek001_signif_down <- de_hek001 %>%
+	filter( padj < 0.05 & FC <= 1.0 ) %>%
+	.[["GoodID"]]
+
+# significant and meets FC cutoff
+hek293_signif_up <- de_hek293 %>%
+	filter( padj < 0.05 & FC >= min_absolute_foldchange ) %>%
+	.[["GoodID"]]
+	
+hek293_signif_down <- de_hek293 %>%
+	filter( padj < 0.05 & FC <= -1 * min_absolute_foldchange ) %>%
+	.[["GoodID"]] 
+
+hek001_signif_up <- de_hek001 %>%
+	filter( padj < 0.05 & FC >= min_absolute_foldchange ) %>%
+	.[["GoodID"]]
+	
+hek001_signif_down <- de_hek001 %>%
+	filter( padj < 0.05 & FC <= -1 * min_absolute_foldchange ) %>%
+	.[["GoodID"]]
+
+# volcano_labels
+hek293_label <- c( hek293_signif_up[1:n_top], hek293_signif_down[1:n_top] )
+hek001_label <- c( hek001_signif_up[1:n_top], hek001_signif_down[1:n_top] )
+
+# write outputs for significant genes
+dplyr::filter( de_hek293, GoodID %in% hek293_signif_up ) %>%
+	.[["NM_noVersion"]] %>%
+	write.table( ., file=file.path( output_rel_dir, "hek293_signif_up.csv" ), sep="\t", row.names = FALSE, col.names = FALSE )
+
+dplyr::filter( de_hek293, GoodID %in% hek293_signif_down ) %>%
+	.[["NM_noVersion"]] %>%
+	write.table( ., file=file.path( output_rel_dir, "hek293_signif_down.csv" ), sep="\t", row.names = FALSE, col.names = FALSE )
+
+dplyr::filter( de_hek001, GoodID %in% hek001_signif_up ) %>%
+	.[["NM_noVersion"]] %>%
+	write.table( ., file=file.path( output_rel_dir, "hek001_signif_up.csv" ), sep="\t", row.names = FALSE, col.names = FALSE )
+
+dplyr::filter( de_hek001, GoodID %in% hek001_signif_down ) %>%
+	.[["NM_noVersion"]] %>%
+	write.table( ., file=file.path( output_rel_dir, "hek001_signif_down.csv" ), sep="\t", row.names = FALSE, col.names = FALSE )
+```
+
+## HEK001 analysis
+HEK001 has `r length(hek001_signif)` significant probes. `r length(hek001_signif_up)` are at least `r min_absolute_foldchange` fold up and `r length(hek001_signif_down)` are at least `r min_absolute_foldchange` fold down.
+
+By unique gene: there are `r ilmn_annote[ hek001_signif, "Symbol" ] %>% unique( . ) %>% length( . )` unique genes. `r ilmn_annote[ hek001_signif_up, "Symbol" ] %>% unique( . ) %>% length( . )` are at least `r min_absolute_foldchange` fold up and `r ilmn_annote[ hek001_signif_down, "Symbol" ] %>% unique( . ) %>% ( length )` are at least `r min_absolute_foldchange` fold down.
+
+## HEK293 analysis
+HEK293 has `r length(hek293_signif)` significant probes. `r length(hek293_signif_up)` are at least `r min_absolute_foldchange` fold up and `r length(hek293_signif_down)` are at least `r min_absolute_foldchange` fold down.
+
+By unique gene: there are `r ilmn_annote[ hek293_signif, "Symbol" ] %>% unique( . ) %>% length( . )` unique genes. `r ilmn_annote[ hek293_signif_up, "Symbol" ] %>% unique( . ) %>% length( . )` are at least `r min_absolute_foldchange` fold up and `r ilmn_annote[ hek293_signif_down, "Symbol" ] %>% unique( . ) %>% ( length )` are at least `r min_absolute_foldchange` fold down.
+
+```{r hek001_volcano}
+out <- de_hek001 %>%
+	mutate( log2FC = logFC ) %>%
+	mutate( qval = padj ) %>%
+	mutate( Significant = case_when( 
+		qval < 0.05 & abs( FC ) >= min_absolute_foldchange ~ "Large",
+		qval < 0.05 ~ "Modest",
+		TRUE ~ "Not" ) ) %>%
+	mutate( Significant = factor( Significant, levels = c( "Not", "Modest", "Large" ) ) )
+
+################################
+# set values for square x axis #
+################################
+x_volcano_value <- ( abs( out$log2FC ) + 0.051 ) %>%
+	max( . ) %>%
+	round( ., 1 )
+
+if ( x_volcano_value < 1.0 ) {
+	x_volcano_value = 1.0
+}
+
+x_num_for_limits <- round( x_volcano_value, 0 )
+
+x_volcano_low <- x_volcano_value * -1
+x_volcano_high <- x_volcano_value
+
+x_break_list <- seq( -1 * x_num_for_limits, x_num_for_limits, by=1 )
+
+###################################
+# actually make the volcano plots #
+###################################
+hek001_volcano <- ggplot( out, aes( x=log2FC, y=-log10( qval ), colour=Significant ) ) +
+	scale_colour_manual( values = c( "darkgray", "blue", "red" ) ) +
+	scale_x_continuous( limits = c( x_volcano_low, x_volcano_high ), breaks = x_break_list ) +
+  theme_bw() +
+  gg_bigger_texts +
+  gg_no_legend +
+  gg_no_grid +
+	gg_center_title +
+  geom_point( size=1.2 ) +
+  geom_hline( yintercept = -log10( 0.05 ), linetype=2 ) +
+  geom_vline( xintercept=c( -1 * log2_min_absolute_foldchange, log2_min_absolute_foldchange ), linetype=2 ) +
+  geom_text_repel( data=subset( out, Significant == "Large" )[c(1:n_top),], colour="black", aes( label=Symbol ), size=3 ) +
+	xlab( parse( text="log[2]~(shA08/shLuc)" ) ) +
+	ylab( parse( text = paste0( "-log[10]~(Adj.~p-value)" ) ) ) +
+	ggtitle( "HEK001" )
+
+hek001_volcano
+```
+
+```{r hek293_volcano}
+out <- de_hek293 %>%
+	mutate( log2FC = logFC ) %>%
+	mutate( qval = padj ) %>%
+	mutate( Significant = case_when( 
+		qval < 0.05 & abs( FC ) >= min_absolute_foldchange ~ "Large",
+		qval < 0.05 ~ "Modest",
+		TRUE ~ "Not" ) ) %>%
+	mutate( Significant = factor( Significant, levels = c( "Not", "Modest", "Large" ) ) )
+
+################################
+# set values for square x axis #
+################################
+x_volcano_value <-( abs( out$log2FC ) + 0.051 ) %>%
+	max( . ) %>%
+	round( ., 1 )
+
+if ( x_volcano_value < 1.0 ) {
+	x_volcano_value = 1.0
+}
+
+x_num_for_limits <- round( x_volcano_value, 0 )
+
+x_volcano_low <- x_volcano_value * -1
+x_volcano_high <- x_volcano_value
+
+x_break_list <- seq( -1 * x_num_for_limits, x_num_for_limits, by=1 )
+
+###################################
+# actually make the volcano plots #
+###################################
+hek293_volcano <- ggplot( out, aes( x=log2FC, y=-log10( qval ), colour=Significant ) ) +
+	scale_colour_manual( values = c( "darkgray", "blue", "red" ) ) +
+	scale_x_continuous( limits = c( x_volcano_low, x_volcano_high ), breaks = x_break_list ) +
+  theme_bw() +
+  gg_bigger_texts +
+  gg_no_legend +
+  gg_no_grid +
+	gg_center_title +
+  geom_point( size=1.2 ) +
+  geom_hline( yintercept = -log10( 0.05 ), linetype=2 ) +
+ geom_vline( xintercept=c( -1 * log2_min_absolute_foldchange, log2_min_absolute_foldchange ), linetype=2 ) +
+  geom_text_repel( data=subset( out, Significant == "Large" )[c(1:n_top),], colour="black", aes( label=Symbol ), size=3 ) +
+	xlab( parse( text="log[2]~(shA08/shLuc)" ) ) +
+	ylab( parse( text = paste0( "-log[10]~(Adj.~p-value)" ) ) ) +
+	ggtitle( "HEK293" )
+
+hek293_volcano
+```
+
+```{r combined_volcano_plot}
+plot_grid( hek001_volcano, hek293_volcano, align='h', labels=c( "(a)", "(b)"  ) )
+```
+
+
+```{r pull_matrix}
+norm.matrix <- exprs( norm.exprs )
+rownames( norm.matrix ) <- paste( "id", rownames( norm.matrix ), sep="_" )
+
+hek001_matrix <- norm.matrix[ which( rownames( norm.matrix ) %in% c( hek001_signif_down, hek001_signif_up ) ), str_detect( colnames( norm.matrix ), "HEK001" ) ]
+
+hek293_matrix <- norm.matrix[ which( rownames( norm.matrix ) %in% c( hek293_signif_down, hek293_signif_up ) ), str_detect( colnames( norm.matrix ), "293" ) ]
+
+hek001_heatmap_col_annote <- data.frame( Status = colnames( hek001_matrix ) ) %>%
+	mutate( Status = ifelse( str_detect( Status, "A08" ), "A08", "shLuc" ) )
+rownames( hek001_heatmap_col_annote ) <- colnames( hek001_matrix )
+
+hek293_heatmap_col_annote <- data.frame( Status = colnames( hek293_matrix ) ) %>%
+	mutate( Status = ifelse( str_detect( Status, "A08" ), "A08", "shLuc" ) )
+rownames( hek293_heatmap_col_annote ) <- colnames( hek293_matrix )
+
+my_palette <- colorRampPalette( rev( brewer.pal( n=9, name="RdBu")))(20)
+```
+
+```{r hek293_heatmap}
+pheatmap( hek293_matrix, main="HEK293 Significant Gene Heatmap\n", color=my_palette, annotation_col=hek293_heatmap_col_annote, show_colnames=FALSE, show_rownames=FALSE, scale="row", cutree_rows = 2, cutree_cols = 2 )
+```
+
+```{r hek001_heatmap}
+pheatmap( hek001_matrix, main="HEK001 Significant Gene Heatmap\n", color=my_palette, annotation_col=hek001_heatmap_col_annote, show_colnames=FALSE, show_rownames=FALSE, scale="row", cutree_rows = 2, cutree_cols = 2 )
+```
+
+```{r info_for_upsets}
+increased_genes_list <- c( all_hek293_signif_up, all_hek001_signif_up ) %>%
+	sort( . ) %>%
+	unique( . )
+
+decreased_genes_list <- c( all_hek293_signif_down, all_hek001_signif_down ) %>%
+	sort( . ) %>%
+	unique( . )
+
+increased_gene_mat <- matrix( nrow=length( increased_genes_list ), ncol=2, 0, dimnames = list( increased_genes_list, c( "HEK001", "HEK293" ) ) ) %>%
+	as.data.frame( . ) %>%
+	rownames_to_column( "GoodID" ) %>%
+	mutate( HEK001 = ifelse( GoodID %in% all_hek001_signif_up, 1, 0 ) ) %>%
+	mutate( HEK293 = ifelse( GoodID %in% all_hek293_signif_up, 1, 0 ) ) %>%
+	column_to_rownames( var="GoodID" )
+
+decreased_gene_mat <- matrix( nrow=length( decreased_genes_list ), ncol=2, 0, dimnames = list( decreased_genes_list, c( "HEK001", "HEK293" ) ) ) %>%
+	as.data.frame( . ) %>%
+	rownames_to_column( "GoodID" ) %>%
+	mutate( HEK001 = ifelse( GoodID %in% all_hek001_signif_down, 1, 0 ) ) %>%
+	mutate( HEK293 = ifelse( GoodID %in% all_hek293_signif_down, 1, 0 ) ) %>%
+	column_to_rownames( var="GoodID" )
+```
+
+```{r decreased_gene_upset}
+upset( decreased_gene_mat, text.scale=c( 3, 3, 3, 2, 3, 3), point.size=5, line.size=2 )
+```
+
+```{r increased_gene_upset}
+upset( increased_gene_mat, text.scale=c( 3, 3, 3, 2, 3, 3), point.size=5, line.size=2 )
+```
+
+```{r intersection_of_de_genes}
+de_hek293_up_df <- de_hek293 %>%
+	filter( GoodID %in% all_hek293_signif_up ) %>%
+	select( GoodID, Symbol, Accession, FC, padj )
+
+de_hek293_down_df <- de_hek293 %>%
+	filter( GoodID %in% all_hek293_signif_down ) %>%
+	select( GoodID, Symbol, Accession, FC, padj )
+
+de_hek001_up_df <- de_hek001 %>%
+	filter( GoodID %in% all_hek001_signif_up ) %>%
+	select( GoodID, Symbol, Accession, FC, padj )
+
+de_hek001_down_df <- de_hek001 %>%
+	filter( GoodID %in% all_hek001_signif_down ) %>%
+	select( GoodID, Symbol, Accession, FC, padj )
+
+overlapping_down <- merge( de_hek293_down_df, de_hek001_down_df, by=c("GoodID","Symbol", "Accession" ), suffixes=c( "_HEK293", "_HEK001" ) ) %>%
+	arrange( Symbol, Accession )
+
+overlapping_up <- merge( de_hek293_up_df, de_hek001_up_df, by=c("GoodID","Symbol", "Accession" ), suffixes=c( "_HEK293", "_HEK001" ) ) %>%
+	arrange( Symbol, Accession )
+
+hek001_down_hek293_up <- merge( de_hek293_up_df, de_hek001_down_df, by=c("GoodID","Symbol", "Accession" ), suffixes=c( "_HEK293", "_HEK001" ) )
+hek001_up_hek293_down <- merge( de_hek293_down_df, de_hek001_up_df, by=c("GoodID","Symbol", "Accession" ), suffixes=c( "_HEK293", "_HEK001" ) )
+
+conflicting <- rbind( hek001_down_hek293_up, hek001_up_hek293_down ) %>%
+	arrange( Symbol, Accession )
+
+write.csv( row.names=FALSE, overlapping_down, file=file.path( output_rel_dir,  "overlapping_down.csv" ) )
+
+write.csv( row.names=FALSE, overlapping_up, file=file.path( output_rel_dir,  "overlapping_up.csv" ) )
+
+write.csv( row.names=FALSE, conflicting, file=file.path( output_rel_dir, "conflicting.csv" ) )
+```
+
+`r dim( overlapping_up )[1]` overlapping **increased** genes, 
+`r dim( overlapping_down )[1]` overlapping **decreased** genes, 
+`r dim( conflicting )[1]` genes with **conflicting** fold-changes.
+
+```{r output_expression_intensities}
+exprs( norm.exprs ) %>%
+	as.data.frame( . ) %>%
+	rownames_to_column( ., var = "ProbeID" ) %>%
+	write_csv( ., path = file.path( output_rel_dir, "normalized_expression.csv" ) )
+```
+
+# Program info
+```{r session_information}
+Sys.time()
+
+getwd()
+  
+sessionInfo()
+```

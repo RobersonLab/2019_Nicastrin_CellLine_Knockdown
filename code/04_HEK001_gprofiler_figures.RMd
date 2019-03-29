@@ -1,0 +1,313 @@
+---
+title: "hek001 gprofileR data"
+author: "E. Roberson"
+created: "March 29, 2018"
+output: html_document
+---
+
+```{r packages}
+library( here )
+library( plyr )
+library( dplyr )
+library( tidyr )
+library( tibble )
+library( ggplot2 )
+library( cowplot )
+library( readr )
+library( stringr )
+
+title.wrap = 35
+title.truncate = 65
+```
+
+```{r source_it}
+source( here::here( 'code', "ncstn_knockdown_fxns.R" ) )
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message=FALSE,
+	fig.path=paste0( output_figure_rel_dir, "/" ),
+	fig.keep='all',
+	dpi=300,
+	fig.width=11,
+	fig.height=8.5 )
+```
+
+## Decreased pathways
+
+```{r read_gprofile_down}
+gprof_fname <- dir( gprof_dir, pattern="gprofiler_results_[0-9]+_hek001_down_v00.txt" )
+gprof_path <- file.path( gprof_dir, gprof_fname )
+gprof_colnames <- c( "ignore", "signf", "p-value", "T", "Q", "Q&T", "Q&T/Q", "Q&T/T", "term ID", "t type", "t group", "t name", "t depth", "Q&T list" )
+
+input <- read_tsv( file=gprof_path, comment="#", col_names = gprof_colnames, col_types = c("ccdiiiddccicic") ) %>%
+	mutate( pvalue = `p-value` ) %>%
+	mutate( name = str_replace( `t name`, "^ +", "" ) ) %>%
+	mutate( type = `t type` ) %>%
+	filter( type %in% c( 'cor', 'BP', 'CC', 'reac', 'rea', 'keg', 'tf' ) ) %>%
+	mutate( term_id = `term ID` ) %>%
+	mutate( title = paste0( term_id, ' - ', name ) ) %>%
+	mutate( title = str_replace_all( title, pattern = "\\; +match class\\: +[0-9]+", replacement = "" ) ) %>%
+	mutate( title = str_trunc( title, width = title.truncate ) ) %>%
+	mutate( title = str_wrap( title, width = title.wrap ) )
+```
+
+```{r get_n}
+plot.tbl <- input %>%
+	ddply( .variables = c( "type" ), .fun = top_n, wt=pvalue, n = -6 )
+```
+
+```{r hek001_gprofile_down}
+bp.plt <- filter( plot.tbl, type == "BP" ) %>%
+	arrange( desc( pvalue ) ) %>%
+	mutate( title = factor( title, levels=title ) ) %>%
+	ggplot( aes( y = -log10( pvalue ), x = title ) ) +
+	theme_classic() +
+	gg_bigger_texts +
+	gg_center_title +
+	coord_flip() +
+	geom_col() +
+	geom_hline( yintercept = -log10( 0.05 ), linetype=2, colour="white"  ) +
+	ylab( parse( text="-log[10](P-value)" ) ) +
+	xlab( "Pathway\n" ) +
+	ggtitle( "GO Biological Process" )
+
+bp.plt
+
+
+cc.plt <- filter( plot.tbl, type == "CC" ) %>%
+	arrange( desc( pvalue ) ) %>%
+	mutate( title = factor( title, levels=title ) ) %>%
+	ggplot( aes( y = -log10( pvalue ), x = title ) ) +
+	theme_classic() +
+	gg_bigger_texts +
+	gg_center_title +
+	coord_flip() +
+	geom_col() +
+	geom_hline( yintercept = -log10( 0.05 ), linetype=2, colour="white"  ) +
+	ylab( parse( text="-log[10](P-value)" ) ) +
+	xlab( "Pathway\n" ) +
+	ggtitle( "GO Cellular Compartment" )
+
+cc.plt
+
+kegg.plt  <- filter( plot.tbl, type == "keg" ) %>%
+	arrange( desc( pvalue ) ) %>%
+	mutate( title = factor( title, levels=title ) ) %>%
+	ggplot( aes( y = -log10( pvalue ), x = title ) ) +
+	theme_classic() +
+	gg_bigger_texts +
+	gg_center_title +
+	coord_flip() +
+	geom_col() +
+	geom_hline( yintercept = -log10( 0.05 ), linetype=2, colour="white"  ) +
+	ylab( parse( text="-log[10](P-value)" ) ) +
+	xlab( "Pathway\n" ) +
+	ggtitle( "KEGG" )
+
+kegg.plt
+
+react.plt <- filter( plot.tbl, type == "rea" ) %>%
+	arrange( desc( pvalue ) ) %>%
+	mutate( title = factor( title, levels=title ) ) %>%
+	ggplot( aes( y = -log10( pvalue ), x = title ) ) +
+	theme_classic() +
+	gg_bigger_texts +
+	gg_center_title +
+	coord_flip() +
+	geom_col() +
+	geom_hline( yintercept = -log10( 0.05 ), linetype=2, colour="white"  ) +
+	ylab( parse( text="-log[10](P-value)" ) ) +
+	xlab( "Pathway\n" ) +
+	ggtitle( "Reactome" )
+
+react.plt
+
+bp.plt <- bp.plt + gg_gprofile_quadplot
+	
+cc.plt <- cc.plt + gg_gprofile_quadplot
+	
+kegg.plt <- kegg.plt + gg_gprofile_quadplot
+	
+react.plt <- react.plt + gg_gprofile_quadplot
+
+plot_grid( bp.plt, cc.plt, kegg.plt, react.plt, labels=c( 'A', 'B', 'C', 'D' ), ncol=2, nrow=2 )
+```
+
+```{r hek001_topn_decreased}
+top_num = 10
+
+tmp <- input %>%
+	filter( type != "tf" ) %>%
+	top_n( ., wt=pvalue, n = -10 ) %>%
+	arrange( desc( pvalue ) ) %>%
+	mutate( title = factor( title, levels=title ) )
+
+if ( dim( tmp )[1] < top_num ) {
+	top_num <- dim( tmp )[1]
+}
+
+topN.decr.plot <- ggplot( tmp, aes( y = -log10( pvalue ), x = title ) ) +
+	theme_classic() +
+	gg_bigger_texts +
+	gg_center_title +
+	coord_flip() +
+	geom_col() +
+	geom_hline( yintercept = -log10( 0.05 ), linetype=2, colour="white" ) +
+	ylab( parse( text="-log[10](P-value)" ) ) +
+	xlab( "Pathway\n" ) +
+	ggtitle( paste0( "Top ", top_num, " Decreased Enrichments" ) ) +
+	 theme( axis.text = element_text( size=16 ) )
+topN.decr.plot
+
+rm( input )
+```
+
+## Increased pathways
+```{r read_gprofile_up}
+gprof_fname <- dir( gprof_dir, pattern="gprofiler_results_[0-9]+_hek001_up_v00.txt" )
+gprof_path <- file.path( gprof_dir, gprof_fname )
+
+input <- read_tsv( file=gprof_path, comment="#", col_names = gprof_colnames, col_types = c("ccdiiiddccicic") ) %>%
+	mutate( pvalue = `p-value` ) %>%
+	mutate( name = str_replace( `t name`, "^ +", "" ) ) %>%
+	mutate( type = `t type` ) %>%
+	filter( type %in% c( 'cor', 'BP', 'CC', 'reac', 'rea', 'keg', 'tf' ) ) %>%
+	mutate( term_id = `term ID` ) %>%
+	mutate( title = paste0( term_id, ' - ', name ) ) %>%
+	mutate( title = str_replace_all( title, pattern = "\\; +match class\\: +[0-9]+", replacement = "" ) ) %>%
+	mutate( title = str_trunc( title, width = title.truncate ) ) %>%
+	mutate( title = str_wrap( title, width = title.wrap ) )
+```
+
+```{r get_n_up}
+plot.tbl <- input %>%
+	ddply( .variables = c( "type" ), .fun = top_n, wt=pvalue, n = -6 )
+```
+
+```{r hek001_gprofile_up}
+bp.plt <- filter( plot.tbl, type == "BP" ) %>%
+	arrange( desc( pvalue ) ) %>%
+	mutate( title = factor( title, levels=title ) ) %>%
+	ggplot( aes( y = -log10( pvalue ), x = title ) ) +
+	theme_classic() +
+	gg_bigger_texts +
+	gg_center_title +
+	coord_flip() +
+	geom_col() +
+	geom_hline( yintercept = -log10( 0.05 ), linetype=2, colour="white"  ) +
+	ylab( parse( text="-log[10](P-value)" ) ) +
+	xlab( "Pathway\n" ) +
+	ggtitle( "GO Biological Process" )
+
+bp.plt
+
+
+cc.plt <- filter( plot.tbl, type == "CC" ) %>%
+	arrange( desc( pvalue ) ) %>%
+	mutate( title = factor( title, levels=title ) ) %>%
+	ggplot( aes( y = -log10( pvalue ), x = title ) ) +
+	theme_classic() +
+	gg_bigger_texts +
+	gg_center_title +
+	coord_flip() +
+	geom_col() +
+	geom_hline( yintercept = -log10( 0.05 ), linetype=2, colour="white"  ) +
+	ylab( parse( text="-log[10](P-value)" ) ) +
+	xlab( "Pathway\n" ) +
+	ggtitle( "GO Cellular Compartment" )
+
+cc.plt
+
+kegg.plt  <- filter( plot.tbl, type == "keg" ) %>%
+	arrange( desc( pvalue ) ) %>%
+	mutate( title = factor( title, levels=title ) ) %>%
+	ggplot( aes( y = -log10( pvalue ), x = title ) ) +
+	theme_classic() +
+	gg_bigger_texts +
+	gg_center_title +
+	coord_flip() +
+	geom_col() +
+	geom_hline( yintercept = -log10( 0.05 ), linetype=2, colour="white"  ) +
+	ylab( parse( text="-log[10](P-value)" ) ) +
+	xlab( "Pathway\n" ) +
+	ggtitle( "KEGG" )
+
+kegg.plt
+
+react.plt <- filter( plot.tbl, type == "rea" ) %>%
+	arrange( desc( pvalue ) ) %>%
+	mutate( title = factor( title, levels=title ) ) %>%
+	ggplot( aes( y = -log10( pvalue ), x = title ) ) +
+	theme_classic() +
+	gg_bigger_texts +
+	gg_center_title +
+	coord_flip() +
+	geom_col() +
+	geom_hline( yintercept = -log10( 0.05 ), linetype=2, colour="white"  ) +
+	ylab( parse( text="-log[10](P-value)" ) ) +
+	xlab( "Pathway\n" ) +
+	ggtitle( "Reactome" )
+
+react.plt
+
+bp.plt <- bp.plt + gg_gprofile_quadplot
+	
+cc.plt <- cc.plt + gg_gprofile_quadplot
+	
+kegg.plt <- kegg.plt + gg_gprofile_quadplot
+	
+react.plt <- react.plt + gg_gprofile_quadplot
+
+plot_grid( bp.plt, cc.plt, kegg.plt, react.plt, labels=c( 'A', 'B', 'C', 'D' ), ncol=2, nrow=2 )
+```
+
+```{r hek001_topn_increased}
+top_num = 10
+
+tmp <- input %>%
+	filter( type != "tf" ) %>%
+	top_n( ., wt=pvalue, n = -10 ) %>%
+	arrange( desc( pvalue ) ) %>%
+	mutate( title = factor( title, levels=title ) )
+
+if ( dim( tmp )[1] < top_num ) {
+	top_num <- dim( tmp )[1]
+}
+
+topN.incr.plot <- ggplot( tmp, aes( y = -log10( pvalue ), x = title ) ) +
+	theme_classic() +
+	gg_bigger_texts +
+	gg_center_title +
+	coord_flip() +
+	geom_col() +
+	geom_hline( yintercept = -log10( 0.05 ), linetype=2, colour="white" ) +
+	ylab( parse( text="-log[10](P-value)" ) ) +
+	xlab( "Pathway\n" ) +
+	ggtitle( paste0( "Top ", top_num, " Increased Enrichments" ) ) +
+	 theme( axis.text = element_text( size=16 ) )
+topN.incr.plot
+```
+
+```{r hek001_gprof_combined_topN}
+#text.adjust =  9
+topN.decr.plot <- topN.decr.plot +
+	gg_gprofile_quadplot
+#	theme( axis.text.y = element_text( size=text.adjust ) )
+
+topN.incr.plot <- topN.incr.plot +
+	gg_gprofile_quadplot
+#	theme( axis.text.y = element_text( size=text.adjust ) )
+
+plot_grid( topN.decr.plot, topN.incr.plot, labels=c( "A", "B" ), nrow=2 )
+```
+
+```{r session_information}
+Sys.time()
+
+getwd()
+  
+sessionInfo()
+```

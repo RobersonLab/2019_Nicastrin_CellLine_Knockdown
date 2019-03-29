@@ -1,0 +1,65 @@
+---
+title: "Setting up Nicastrin knockdown paper analysis"
+author: "Elisha Roberson"
+date: "January 07, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message=FALSE )
+```
+
+```{r libraries}
+library( dplyr )
+library( here )
+library( readr )
+```
+
+```{r source_it}
+source( here::here( 'code', 'ncstn_knockdown_fxns.R' ) )
+```
+
+```{r setup_directories}
+dir.create( input_rel_dir, showWarnings = FALSE )
+dir.create( output_rel_dir, showWarnings = FALSE )
+dir.create( output_figure_rel_dir, showWarnings = FALSE )
+dir.create( gprof_dir, showWarnings = FALSE )
+```
+
+```{r grab_files}
+# download and rename files from figshare
+# the links are stored in the shared fxns file as file_link_map
+# its a list a things with link as first bin and destination file as bin 2
+
+for ( idx in 1:length( file_link_map ) ) {
+  url = file_link_map[[ idx ]][1] %>% as.character( . )
+  fname = file_link_map[[ idx ]][2] %>% as.character( . )
+  
+  dest = here::here( 'data', fname )
+  
+  download.file( url = url, destfile = dest, mode = 'wb' )
+}
+```
+
+```{r unzip_y_split}
+# unzip the microarray data and split into data / annotation
+tmp <- read_csv( file = paste0( raw_knockdown_array, '.gz' ) )
+
+select( .data = tmp, ProbeID, starts_with( "NCSTN" ) ) %>%
+  write_csv( x = ., path = raw_knockdown_array )
+
+select( .data = tmp, ProbeID, SYMBOL, ILMN_GENE, ACCESSION ) %>%
+  write_csv( x = ., path = annotation )
+```
+
+## sessionInfo
+```{r session_information}
+Sys.time()
+
+getwd()
+  
+sessionInfo()
+```
+

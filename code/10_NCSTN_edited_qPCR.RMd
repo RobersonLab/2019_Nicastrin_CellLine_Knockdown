@@ -1,0 +1,92 @@
+---
+title: "Genome-edited NCSTN RT-qPCR"
+author: "E. Roberson"
+date: "March 20, 2018"
+output: html_document
+---
+
+```{r libraries}
+library( here )
+library( plyr )
+library( dplyr )
+library( ggplot2 )
+library( stringr )
+library( readr )
+```
+
+```{r source_it}
+source( here::here( 'code', "ncstn_knockdown_fxns.R" ) )
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message=FALSE,
+	fig.path=paste0( output_figure_rel_dir, "/" ),
+	fig.keep='all',
+	dpi=300,
+	fig.width=11,
+	fig.height=8.5 )
+```
+
+## Import data
+```{r read_data}
+postedit_rtqpcr <- read_csv( knockout_rtqpcr, col_names=TRUE ) %>%
+	mutate( GenomeEdit = str_replace( GenomeEdit, "C_T_48", "Het. Deletion" ) ) %>%
+	mutate( GenomeEdit = factor( GenomeEdit, levels=c( "WT", "Het. Deletion" ) ) ) %>%
+	mutate( Cq = Ct ) %>%
+	mutate( Primer = str_replace( Primer, "NCSTN F2/R2", "Amplicon 2" ) ) %>%
+	mutate( Primer = factor( Primer, levels=c( "18S", "Amplicon 2" ) ) ) %>%
+	filter( !is.na( Cq ) )
+
+summary( postedit_rtqpcr )
+```
+
+## Generate values with error propagation
+
+### Apply propagation
+```{r prop_errors}
+kd_stats <- postedit_rtqpcr %>%
+	group_by( GenomeEdit, Primer ) %>%
+	dplyr::summarize( n=length( Cq ),
+									 mean = mean( Cq ),
+									 sd = sd( Cq ) )
+
+kd_dCq <- ddply( kd_stats, c( "GenomeEdit" ), .fun=deltaCqs, refCol="Primer" )
+
+kd_ddCq <- deltaCqs( input_df = kd_dCq, reference = "WT", refCol = "GenomeEdit", include_ref = TRUE  ) %>%
+	mutate( foldchange_mean = 2 ^ ( -1 * mean ) ) %>%
+	mutate( foldchange_sd = log(2) * foldchange_mean * sd )
+
+# This is an often overlooked point. All of these measurements have error.
+# This includes the reference gene measurements and the exponentiation.
+# Propagating these errors accurately incorporates this uncertainty.
+
+kd_ddCq
+
+summary( kd_ddCq )
+```
+
+## Plot the data
+```{r postedit_rtqpcr}
+ggplot( kd_ddCq, aes( x=GenomeEdit, y=foldchange_mean ) ) +
+	scale_y_continuous( limits=c( 0, 1.2 ) ) +
+  xlab( "\nGenome edit status" ) +
+  ylab( "NCSTN Relative Expression\n" ) +
+  theme_bw() +
+  gg_no_x_grid +
+	gg_bigger_texts +
+  geom_abline( intercept=1.0, slope=0, lty=2 ) +
+	geom_errorbar( aes( ymin = foldchange_mean - foldchange_sd, ymax = foldchange_mean + foldchange_sd ), width=0.2, position = position_dodge( 0.3 ), lwd=1.02 ) +
+	geom_point( size=3.5, position=position_dodge( 0.3 ), shape=17 ) 
+```
+
+## sessionInfo
+```{r session_information}
+Sys.time()
+
+getwd()
+  
+sessionInfo()
+```
+

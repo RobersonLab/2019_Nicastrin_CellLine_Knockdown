@@ -1,0 +1,175 @@
+---
+title: "HEK293 knockdown ligand stimulation"
+author: "E. Roberson"
+date: "March 10, 2018"
+output: html_document
+---
+
+```{r libraries}
+library( here )
+library( plyr )
+library( dplyr )
+library( ggplot2 )
+library( reshape2 )
+library( stringr )
+library( readr )
+library( tidyr )
+library( tibble )
+```
+
+```{r source_it}
+source( here::here( 'code', "ncstn_knockdown_fxns.R" ) )
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message=FALSE,
+	fig.path=paste0( output_figure_rel_dir, "/" ),
+	fig.keep='all',
+	dpi=300,
+	fig.width=11,
+	fig.height=8.5 )
+```
+
+## Import data
+```{r read_data}
+indat <- read_csv( knockdown_stimulate_luciferase, col_names=TRUE ) %>%
+	mutate( shRNA = as.character( shRNA ) ) %>%
+	mutate( shRNA = factor( shRNA, levels = c( "shGFP", "shLuc", "A08" ) ) ) %>%
+	mutate( Treatment = str_replace( Treatment, "TNFA", "TNF" ) ) %>%
+	filter( Treatment %in% c( "None", "TNF" ) ) %>%
+	mutate( Treatment = factor( Treatment, levels = c( "None", "TNF" ) ) )
+
+factors <- indat[ , c( "shRNA", "Treatment" ) ]
+firefly <- indat[ , grep("firefly", colnames(indat)) ]
+renilla <- indat[ , grep("Renilla", colnames(indat)) ]
+
+firefly
+
+renilla
+
+luc.dat <- cbind( factors, firefly / renilla )
+
+luc.dat
+```
+
+## Reshape the data
+
+```{r reshape}
+luc.melt <- melt( luc.dat ) %>%
+	mutate( value = log2( value ) ) # RELAX the log2 is on purpose
+# plotting out the RFU data shows a strong mean-variance relationship
+# which knocks out doing any sort of normality assumption
+# but we can log2 transform the data to take care of that.
+# helps with both the visualization and the Tukey HSD test.
+```
+
+## Summarize data
+```{r melt_summary}
+luc.melt.summarized <- luc.melt %>%
+	group_by( shRNA, Treatment ) %>%
+	dplyr::summarize(
+		mean = mean( value, na.rm=TRUE ),
+		sd = sd( value, na.rm=TRUE ),
+		n = length( value )
+	)
+
+luc.melt.summarized
+```
+
+## Plot the resulting data
+```{r hek293_shRNA_KD_stimulation}
+plain_plot <- ggplot( luc.melt, aes( x=Treatment, y=value, group=shRNA, shape=shRNA, colour=shRNA ) ) +
+	scale_color_manual( values = cbPalette[c(3,1,2)] ) +
+	geom_point( size=4, position=position_jitterdodge(0.3) ) +
+	xlab( "\nLigand Treatment" ) +
+	ylab( parse( text="log[2]~(RFU)" ) ) +
+	theme_bw() +
+	gg_bigger_texts +
+	theme( legend.position = "top" ) +
+	gg_center_title +
+	guides( shape=guide_legend( title="shRNA" ) )
+
+plain_plot
+
+# add significance segments
+none_low_x_start <- 0.70
+none_low_x_end <- 1.05
+none_low_y <- 3.95
+none_vert_x <- ( none_low_x_start + none_low_x_end ) / 2
+
+none_a08_low_y <- 4.75
+none_high_y <- none_a08_low_y + 0.4
+none_high_x_end <- 1.25
+
+asterisk_vert_offset <- 0.10
+asterisk_size_factor <- 5
+
+none_v_tnf_low_x_start = none_low_x_start
+none_v_tnf_low_x_end = 1.30
+none_v_tnf_low_vert_x = 1
+none_v_tnf_low_y = 6.2
+
+none_v_tnf_highest_y = 7.6
+
+none_v_tnf_high_x_start = 1.70
+none_v_tnf_high_x_end = 2.30
+none_v_tnf_high_vert_x = 2
+none_v_tnf_high_y = 7.20
+
+plain_plot +
+	gg_no_x_grid +
+	scale_y_continuous( limits=c( 0, 8 ) ) +
+	# None section
+	geom_segment( aes( x=none_low_x_start, y=none_low_y, xend=none_low_x_end, yend=none_low_y ), colour="black" ) +
+	geom_segment( aes( x=none_vert_x, y=none_low_y, xend=none_vert_x, yend=none_high_y ), colour="black" ) +
+	geom_segment( aes( x=none_vert_x, y=none_high_y, xend=none_high_x_end, yend=none_high_y ), colour="black" ) +
+	geom_segment( aes( x=none_high_x_end, y=none_high_y, xend=none_high_x_end, yend=none_a08_low_y ), colour="black" ) +
+	geom_text( aes( x = ( none_vert_x + none_high_x_end ) / 2, y=none_high_y+asterisk_vert_offset ), label = "*", colour="black", size=asterisk_size_factor, hjust=0.5 ) +
+	# between two
+	geom_segment( aes( x = none_v_tnf_low_x_start, y=none_v_tnf_low_y, xend=none_v_tnf_low_x_end, yend = none_v_tnf_low_y ), colour="black" ) +
+	geom_segment( aes( x = none_v_tnf_low_vert_x, y = none_v_tnf_low_y, xend=none_v_tnf_low_vert_x, yend = none_v_tnf_highest_y ), colour="black" ) +
+	geom_segment( aes( x=none_v_tnf_high_x_start, y=none_v_tnf_high_y, xend=none_v_tnf_high_x_end, yend=none_v_tnf_high_y ), colour="black" ) +
+	geom_segment( aes( x=none_v_tnf_high_vert_x, xend=none_v_tnf_high_vert_x, y=none_v_tnf_high_y, yend = none_v_tnf_highest_y ), colour="black" ) +
+	geom_segment( aes( x=none_v_tnf_low_vert_x, xend=none_v_tnf_high_vert_x, y=none_v_tnf_highest_y, yend=none_v_tnf_highest_y ), colour="black" ) +
+	geom_text( aes( x = ( none_v_tnf_low_vert_x + none_v_tnf_high_vert_x ) / 2, y=none_v_tnf_highest_y+asterisk_vert_offset ), label = "*", colour="black", size=asterisk_size_factor, hjust=0.5 ) 
+```
+
+## Calculate significance of differences
+```{r calc_fold_changes}
+luc.melt.summarized <- luc.melt.summarized %>%
+	mutate( tukey_id = paste( shRNA, Treatment, sep=":" ) ) %>%
+	as.data.frame( . )
+rownames( luc.melt.summarized ) = luc.melt.summarized$tukey_id
+```
+
+```{r TukeyHSD}
+tukey_hsd <- aov( value ~ shRNA*Treatment, data=luc.melt ) %>%
+	TukeyHSD( . )
+
+tukey_hsd
+
+tukey_fcs <- ldply( .data = rownames( tukey_hsd[['shRNA:Treatment']] ), .fun = luciferase_foldchange, luc.melt.summarized )
+
+tukey_hsd[['shRNA:Treatment']] %>%
+	as.data.frame( . ) %>%
+	rownames_to_column( ., "tukey_id" ) %>%
+	merge( ., tukey_fcs ) %>%
+	mutate( ., Comparison = tukey_id ) %>%
+	select( -tukey_id ) %>%
+	separate( ., Comparison, into=c( "Side1", "Side2" ), sep="\\-" ) %>%
+	separate( ., Side1, into=c( "shRNA_LHS", "Treatment_LHS" ) , sep="\\:" ) %>%
+	separate( ., Side2, into=c( "shRNA_RHS", "Treatment_RHS" ), sep="\\:" ) %>%
+	select( shRNA_LHS, Treatment_LHS, shRNA_RHS, Treatment_RHS, diff, lwr, upr, `p adj`, Foldchange_mean, Foldchange_sd ) %>%
+	write_csv( ., path = file.path( output_rel_dir, "tukey_hsd_knockdown_luciferase.csv" ) )
+```
+
+## sessionInfo
+```{r sessionInfo}
+Sys.time()
+
+getwd()
+
+sessionInfo()
+```

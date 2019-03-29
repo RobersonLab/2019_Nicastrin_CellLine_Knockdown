@@ -1,0 +1,89 @@
+---
+title: "hek293 gprofileR data"
+author: "E. Roberson"
+created: "March 29, 2018"
+output: html_document
+---
+
+```{r packages}
+library( here )
+library( plyr )
+library( dplyr )
+library( purrr )
+library( tidyr )
+library( tibble )
+library( readr )
+library( stringr )
+```
+
+```{r source_it}
+source( here::here( 'code', "ncstn_knockdown_fxns.R" ) )
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message=FALSE,
+	fig.path=paste0( output_figure_rel_dir, "/" ),
+	fig.keep='all',
+	dpi=300,
+	fig.width=11,
+	fig.height=8.5 )
+```
+
+```{r annotation}
+ilmn_annote <- read_csv( annotation, col_names = TRUE ) %>%
+	mutate( ., Symbol = SYMBOL ) %>%
+	mutate( ., RefSeq = str_replace( ACCESSION, pattern = "\\.[0-9]+", replacement = "" ) ) %>%
+	select( Symbol, RefSeq ) %>%
+	group_by( RefSeq ) %>%
+	dplyr::summarise( id = paste( unique( Symbol ), collapse="|" ) ) %>%
+	as.data.frame( . ) %>%
+	column_to_rownames( "RefSeq" )
+```
+
+```{r fxn}
+convertRefseqList2SymbolList <- function( input_string, string_sep = ",", out_sep=",", name_frame = ilmn_annote ) {
+	str_split( string = input_string, pattern = string_sep ) %>%
+		unlist( "," ) %>%
+		map_chr( .x = ., ~ name_frame[ .x, 1 ] ) %>%
+		sort( . ) %>%
+		paste( ., collapse = out_sep ) %>%
+		return( . )
+}
+```
+
+```{r add_symbol_to_grof}
+gprof_colnames <- c( "ignore", "signf", "p-value", "T", "Q", "Q&T", "Q&T/Q", "Q&T/T", "term ID", "t type", "t group", "t name", "t depth", "Q&T list" )
+
+gprof_fname <- dir( gprof_dir, pattern="gprofiler_results_[0-9]+_hek293_down_v00.txt" )
+gprof_path <- file.path( gprof_dir, gprof_fname )
+
+read_tsv( file=gprof_path, comment="#", col_names = gprof_colnames, col_types = c("ccdiiiddccicic") ) %>%
+	mutate( name = str_replace( `t name`, "^ +", "" ) ) %>%
+	select( -ignore, -signf ) %>%
+	mutate( Symbols = map( `Q&T list`, convertRefseqList2SymbolList ) ) %>%
+	unnest( . ) %>%
+	arrange( `p-value` ) %>%
+	write_tsv( path = str_replace( gprof_path, pattern = "v00\\.txt", "v01.txt" ) )
+
+# other file
+gprof_fname <- dir( gprof_dir, pattern="gprofiler_results_[0-9]+_hek293_up_v00.txt" )
+gprof_path <- file.path( gprof_dir, gprof_fname )
+
+read_tsv( file=gprof_path, comment="#", col_names = gprof_colnames, col_types = c("ccdiiiddccicic") ) %>%
+	mutate( name = str_replace( `t name`, "^ +", "" ) ) %>%
+	select( -ignore, -signf ) %>%
+	mutate( Symbols = map( `Q&T list`, convertRefseqList2SymbolList ) ) %>%
+	unnest( . ) %>%
+	arrange( `p-value` ) %>%
+	write_tsv( path = str_replace( gprof_path, pattern = "v00\\.txt", "v01.txt" ) )
+```
+
+```{r session_information}
+Sys.time()
+
+getwd()
+  
+sessionInfo()
+```

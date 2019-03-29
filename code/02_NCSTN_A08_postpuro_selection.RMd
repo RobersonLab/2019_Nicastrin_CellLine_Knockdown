@@ -1,0 +1,98 @@
+---
+title: "Post Puromycin selection of A08 knockdown"
+author: "E. Roberson"
+date: "March 2, 2018"
+output: html_document
+---
+
+siRNA construct A08 was transfected into both HEK001 and HEK293 cells. After one week of selection in puromycin real-time PCR was repeated to confirm a selected knockdown.
+
+```{r source_and_libraries}
+library( plyr )
+library( dplyr )
+library( ggplot2 )
+library( reshape2 )
+library( stringr )
+library( readr )
+```
+
+```{r source_it}
+source( here::here( 'code', "ncstn_knockdown_fxns.R" ) )
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message=FALSE,
+	fig.path=paste0( output_figure_rel_dir, "/" ),
+	fig.keep='all',
+	dpi=300,
+	fig.width=11,
+	fig.height=8.5 )
+```
+
+## Import data
+```{r read_data}
+postpuro_rtqpcr <- read_csv( knockdown_postpuro_rtqpcr, col_names=TRUE ) %>%
+	mutate( Cell_Line = factor( Cell_Line, levels=c( "HEK001", "HEK293" ) ) ) %>%
+	mutate( Construct = factor( Construct, levels=c( "control", "shLuc", "A08" ) ) ) %>%
+	mutate( Amplicon = str_replace( Amplicon, "_", " " ) ) %>%
+	mutate( Amplicon = factor( Amplicon, levels=c( "18S", "Amplicon 2" ) ) ) %>%
+	mutate( Primer = str_replace( Primer, "\\.", " " ) ) %>%
+	mutate( Primer = factor( Primer, levels=c( "18S", "NCSTN F2/R2" ) ) ) %>%
+	filter( !is.na( Cq ) )
+
+summary( postpuro_rtqpcr )
+```
+
+## Generate values with error propagation
+
+### Apply propagation
+```{r prop_errors}
+kd_stats <- postpuro_rtqpcr %>%
+	group_by( Cell_Line, Construct, Amplicon, Primer ) %>%
+	dplyr::summarize( n=length( Cq ),
+									 mean = mean( Cq ),
+									 sd = sd( Cq ) )
+
+kd_dCq <- ddply( kd_stats, c("Cell_Line", "Construct" ), .fun=deltaCqs )
+
+kd_ddCq <- ddply( kd_dCq, c( "Cell_Line", "Amplicon" ), .fun=deltaCqs, refCol="Construct", reference="control" ) %>%
+	mutate( foldchange_mean = 2 ^ ( -1 * mean ) ) %>%
+	mutate( foldchange_sd = log(2) * foldchange_mean * sd )
+
+# This is an often overlooked point. All of these measurements have error.
+# This includes the reference gene measurements and the exponentiation.
+# Propagating these errors accurately incorporates this uncertainty.
+
+kd_ddCq
+
+summary( kd_ddCq )
+```
+
+## Plot the data
+```{r RTqPCR_stable_knockdown}
+ggplot( kd_ddCq, aes( x=Construct, y=foldchange_mean ) ) +
+  facet_wrap( ~Cell_Line, nrow=1 ) +
+  xlab( "\nshRNA Knockdown Construct" ) +
+  ylab( "NCSTN Relative Expression\n" ) +
+  theme_bw() +
+  scale_fill_continuous( breaks=seq(0,1.25, by=0.25 ), limits = c( 0, 1.35) ) +
+  scale_colour_manual( values=cbPalette ) +
+  gg_no_grid +
+	theme( legend.position="top" ) +
+	gg_bigger_texts +
+  geom_abline( intercept=1.0, slope=0, lty=2 ) +
+	geom_errorbar( aes( ymin = foldchange_mean - foldchange_sd, ymax = foldchange_mean + foldchange_sd ), width=0.2, position = position_dodge( 0.3 ), lwd=1.02 ) +
+	geom_point( size=3.5, position=position_dodge( 0.3 ), shape=17 ) 
+```
+
+## sessionInfo
+```{r session_information}
+Sys.time()
+
+getwd()
+  
+sessionInfo()
+```
+

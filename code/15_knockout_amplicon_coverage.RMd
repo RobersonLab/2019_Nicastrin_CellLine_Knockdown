@@ -1,0 +1,130 @@
+---
+title: "AmpliconCoverage"
+author: "E. Roberson"
+date: "March 22, 2018"
+output: html_document
+---
+
+```{r library}
+library( here )
+library( plyr )
+library( dplyr )
+library( ggplot2 )
+library( stringr )
+library( readr )
+library( tibble )
+```
+
+```{r source_it}
+source( here::here( 'code', "ncstn_knockdown_fxns.R" ) )
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message=FALSE,
+	fig.path=paste0( output_figure_rel_dir, "/" ),
+	fig.keep='all',
+	dpi=300,
+	fig.width=11,
+	fig.height=8.5 )
+```
+
+```{r fxn}
+extract_flagstat_depth <- function( fpath ) {
+	read_tsv( fpath, col_names=c( "flagstat" ), col_types = 'c' ) %>%
+		filter( ., str_detect( flagstat, pattern = " mapped \\(" ) ) %>%
+		as.data.frame( . ) %>%
+		.[[ 1, 1 ]] %>%
+		str_split( ., pattern = " " ) %>%
+		unlist( . ) %>%
+		.[[1]] %>%
+		as.integer( . ) %>%
+		return( . )
+}
+```
+
+```{r seq_depth}
+sic75depth <- extract_flagstat_depth( file.path( input_rel_dir, "sic75_flagstat.txt" ) )
+sic76depth <- extract_flagstat_depth( file.path( input_rel_dir, "sic76_flagstat.txt" ) )
+```
+
+```{r input}
+sic75 <- read_tsv( sic75_coverage, col_names = c( 'chrom', 'start', 'end', 'internal_pos', 'depth' ), col_types = 'ciiii' ) %>%
+	mutate( sample = "WT" ) %>%
+	select( sample, internal_pos, depth )
+
+sic76 <- read_tsv( sic76_coverage, col_names = c( 'chrom', 'start', 'end', 'internal_pos', 'depth' ), col_types = 'ciiii' ) %>%
+	mutate( sample = "HetDel" ) %>%
+	select( sample, internal_pos, depth )
+
+combo <- rbind( sic75, sic76 )
+
+med.cover.wt <- subset( combo, sample == "WT" ) %>%
+	as.data.frame( . ) %>%
+	.[ , "depth" ] %>%
+	median( . )
+	
+med.cover.hetdel <- subset( combo, sample == "HetDel" ) %>%
+	as.data.frame( . ) %>%
+	.[ , "depth" ] %>%
+	median( . )
+
+adj.factor <- data.frame(
+	sample = c( "WT", "HetDel" ),
+	medcover = c( med.cover.wt, med.cover.hetdel ),
+	flagstatalign = c(sic75depth, sic76depth) ) %>%
+	column_to_rownames( ., "sample" )
+
+combo <- combo %>%
+	mutate( medCover = depth / adj.factor[ sample, "medcover" ] ) %>%
+	mutate( totalDepth = depth / adj.factor[ sample, "flagstatalign" ] )
+```
+
+```{r make_ucsc_wiggle_file}
+# WT
+wiggle.name <- file.path( output_rel_dir, "genome_edit.wig" )
+fileCon <- file( wiggle.name )
+writeLines( "track type=wiggle_0 name=WT_HEK293 visibility=2 autoScale=off\nfixedStep\tchrom=chr1\tstart=160326154\tstep=1", fileCon )
+close( fileCon )
+
+combo %>%
+	filter( sample == "WT" ) %>%
+	select( medCover ) %>%
+	write_tsv( path = wiggle.name, col_names = FALSE, append = TRUE )
+
+fileCon <- file( wiggle.name, open="a" )
+writeLines( "track type=wiggle_0 name=HetDel_HEK293 visibility=2 autoScale=off\nfixedStep\tchrom=chr1\tstart=160326154\tstep=1", fileCon )
+close( fileCon )
+
+combo %>%
+	filter( sample == "HetDel" ) %>%
+	select( medCover ) %>%
+	write_tsv( path = wiggle.name, col_names = FALSE, append = TRUE )
+```
+
+```{r genome_edit_seq_plot}
+ymin = 0.9
+ymax = 1.85
+grna.start = 288
+grna.end = 307
+
+ggplot( combo, aes( x=internal_pos, y=medCover, group=sample, shape=sample, colour=sample ) ) +
+	theme_bw() +
+	geom_rect( aes( xmin=grna.start, xmax=grna.end, ymin=ymin, ymax=ymax ), alpha=0.6, fill="grey", colour="grey" ) +
+	geom_point() +
+	theme( legend.position = "top" ) +
+	scale_colour_manual( values = c( "orange", "blue" ) ) +
+	xlab( "Amplicon Position" ) +
+	ylab( "Depth / Median Amplicon Coverage\n" ) +
+	gg_bigger_texts
+```
+
+## sessionInfo
+```{r sessionInfo}
+Sys.time()
+
+getwd()
+
+sessionInfo()
+```

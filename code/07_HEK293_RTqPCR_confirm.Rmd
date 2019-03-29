@@ -1,0 +1,178 @@
+---
+title: "HEK293 Knockdown confirm RT-qPCR"
+author: "E. Roberson"
+date: "March 5, 2018"
+output: html_document
+---
+
+```{r libraries}
+library( here )
+library( plyr )
+library( dplyr )
+library( ggplot2 )
+library( cowplot )
+library( reshape2 )
+library( stringr )
+library( readr )
+```
+
+```{r source_it}
+source( here::here( 'code', "ncstn_knockdown_fxns.R" ) )
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message=FALSE,
+	fig.path=paste0( output_figure_rel_dir, "/" ),
+	fig.keep='all',
+	dpi=300,
+	fig.width=11,
+	fig.height=8.5 )
+```
+
+## Import data
+```{r read_data}
+rtqpcr <- read_csv( knockdown_hek293_rtqpcr_confirm, col_names=TRUE ) %>%
+	select( -Batch ) %>%
+	mutate( Construct = str_replace( Construct, "pLKO", "shLuc" ) ) %>%
+	mutate( Construct = factor( Construct, levels=c( "shLuc", "A08" ) ) ) %>%
+	mutate( Tech_Rep = factor( Tech_Rep, levels=c( "i", "ii", "iii" ) ) ) %>%
+	mutate( Amplicon = str_replace( Amplicon, "NCSTN_Amp2", "NCSTN" ) ) %>%
+	mutate( Amplicon = factor( Amplicon ) ) 
+
+summary( rtqpcr )
+```
+
+
+### Apply propagation
+```{r prop_errors}
+collapse_tech_reps <- rtqpcr %>%
+	filter( !is.na( Cq ) ) %>%
+	group_by( Construct, Amplicon ) %>%
+	dplyr::summarize( 
+		n = length( Cq ),
+		mean = mean( Cq, na.rm=TRUE ),
+		sd = sd( Cq, na.rm=TRUE ) ) %>%
+	mutate( sd = case_when( 
+		is.nan( sd ) ~ 0,
+		TRUE ~ sd ) )
+
+summary( collapse_tech_reps )
+
+dCq <- ddply( .data = collapse_tech_reps, .variables = c( "Construct" ), .fun = deltaCqs )
+
+ddCq <- ddply( dCq, c( "Amplicon" ), .fun=deltaCqs, refCol="Construct", reference="shLuc" ) %>%
+	mutate( foldchange_mean = 2 ^ ( -1 * mean ) ) %>%
+	mutate( foldchange_sd = log(2) * foldchange_mean * sd )
+```
+
+```{r get18Srange}
+rects_for_18S <- filter( dCq, Construct == "shLuc" ) %>%
+	ddply( ., c( "Amplicon" ), .fun=deltaCqs, refCol="Construct", reference="shLuc", include_ref=TRUE ) %>%
+	mutate( foldchange_mean = 2 ^ ( -1 * mean ) ) %>%
+	mutate( foldchange_sd = log(2) * foldchange_mean * sd )
+
+gene.class <- ddCq %>%
+	mutate( express_class = case_when(
+		foldchange_mean > 1.0 ~ "Up",
+		TRUE ~ "Down" ) ) %>%
+	select( Amplicon, express_class )
+
+gene.down.list <- gene.class %>%
+	filter( express_class == "Down" ) %>%
+	.[ , "Amplicon" ]
+
+gene.up.list <- gene.class %>%
+	filter( express_class == "Up" ) %>%
+	.[ , "Amplicon" ]
+
+rects.down <- rects_for_18S %>%
+	filter( Amplicon %in% gene.down.list ) %>%
+	mutate( Amplicon = as.character( Amplicon ) ) %>%
+	mutate( Amplicon = factor( Amplicon ) ) %>%
+	mutate( xstart = as.integer( Amplicon ) - 0.20 ) %>%
+	mutate( xend = as.integer( Amplicon ) + 0.20 ) %>%
+	mutate( ystart = foldchange_mean - foldchange_sd ) %>%
+	mutate( yend = foldchange_mean + foldchange_sd ) %>%
+	select( Amplicon, xstart, xend, ystart, yend )
+
+rects.up <- rects_for_18S %>%
+	filter( Amplicon %in% gene.up.list ) %>%
+	mutate( Amplicon = as.character( Amplicon ) ) %>%
+	mutate( Amplicon = factor( Amplicon ) ) %>%
+	mutate( xstart = as.integer( Amplicon ) - 0.20 ) %>%
+	mutate( xend = as.integer( Amplicon ) + 0.20 ) %>%
+	mutate( ystart = foldchange_mean - foldchange_sd ) %>%
+	mutate( yend = foldchange_mean + foldchange_sd ) %>%
+	select( Amplicon, xstart, xend, ystart, yend )
+```
+
+```{r hek293_shRNA_qPCR_confirmation}
+up.qpcr.plot <- filter( ddCq, foldchange_mean > 1.0 ) %>%
+	ggplot( ., aes( x=Amplicon, y=foldchange_mean ) ) +
+  xlab( "\nAmplicon" ) +
+  ylab( "Fold-change\n" ) +
+  theme_bw() +
+  scale_colour_manual( values=cbPalette ) +
+  gg_no_grid +
+	theme( legend.position="top" ) +
+	gg_bigger_texts +
+  geom_abline( intercept=1.0, slope=0, lty=2 ) +
+	geom_errorbar( aes( ymin=foldchange_mean - foldchange_sd, ymax=foldchange_mean + foldchange_sd ), width=0.2, position=position_dodge(0.3), lwd=1.15 ) +
+	geom_point( size=3, position=position_dodge(0.3) ) +
+	ggtitle( "HEK293 RT-qPCR - increased expression\n" ) +
+	gg_center_title +
+	theme( axis.text = element_text( size=18 ) ) +
+	geom_rect( data=rects.up,
+						 aes(
+						 	xmin = xstart,
+						 	xmax = xend,
+						 	ymin = ystart,
+						 	ymax = yend ),
+						 colour="grey", alpha=0.25, inherit.aes = FALSE )
+
+down.qpcr.plot <- filter( ddCq, foldchange_mean < 1.0 ) %>%
+	mutate( foldchange_min = ifelse( foldchange_mean - foldchange_sd < 0.0, 0.0, foldchange_mean - foldchange_sd ) ) %>%
+	mutate( foldchange_max = foldchange_mean + foldchange_sd ) %>%
+	ggplot( ., aes( x=Amplicon, y=foldchange_mean ) ) +
+  xlab( "\nAmplicon" ) +
+  ylab( "Fold-change\n" ) +
+	scale_y_continuous( limits = c( 0.0, 1.4 ), breaks=seq( 0.0, 1.4, 0.2 ) ) +
+  theme_bw() +
+  scale_colour_manual( values=cbPalette ) +
+  gg_no_grid +
+	theme( legend.position="top" ) +
+	gg_bigger_texts +
+  geom_abline( intercept=1.0, slope=0, lty=2 ) +
+	geom_errorbar( aes( ymin=foldchange_min, ymax=foldchange_max ), width=0.2, position=position_dodge(0.3), lwd=1.15 ) +
+	geom_point( size=3, position=position_dodge(0.3) ) +
+	ggtitle( "HEK293 RT-qPCR - decreased expression\n" ) +
+	gg_center_title +
+	theme( axis.text = element_text( size=18 ) ) +
+	geom_rect( data=rects.down,
+						 aes(
+						 	xmin = xstart,
+						 	xmax = xend,
+						 	ymin = ystart,
+						 	ymax = yend ),
+						 colour="grey", alpha=0.25, inherit.aes = FALSE )
+
+
+down.qpcr.plot
+up.qpcr.plot
+```
+
+
+```{r hek293_rtqpcr_confirm_combined}
+plot_grid( up.qpcr.plot + xlab( "\n" ), down.qpcr.plot, align='h', labels=c("A", "B"), nrow=2 )
+```
+
+# Program info
+```{r session_information}
+Sys.time()
+
+getwd()
+  
+sessionInfo()
+```
