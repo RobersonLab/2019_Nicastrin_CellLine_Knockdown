@@ -3,10 +3,15 @@ This repository contains the code required to generate figures and perform analy
 
 ## Related links
 [GEO expression data](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE57949)
+
 [Sequencing Project](https://www.ncbi.nlm.nih.gov/bioproject/?term=PRJNA268374)
+
 [Miscellaneous data](https://figshare.com/projects/2019_Roberson_lab_nicastrin_cell_line_knockdown_data/58658)
+
 [Preprint](https://www.biorxiv.org/content/early/2018/06/22/353482.1)
+
 [Published paper](https://onlinelibrary.wiley.com/doi/abs/10.1111/ced.13906)
+
 
 ## Requirements
 
